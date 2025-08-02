@@ -102,16 +102,28 @@ def get_openai_client():
     return app_state["openai_client"]
 
 # === JIRA + GitHub Functions ===
-def create_jira_ticket(summary, description, state: AgentState):
-    """Create JIRA ticket using the jira_agent handler."""
+def create_jira_ticket(summary, description, state: AgentState, priority="Medium"):
+    """Create JIRA ticket using the jira_agent handler with priority support."""
     try:
         if app_state["jira_handler"]:
             # Use the advanced jira_agent handler
+            from jira_agent.models import TicketPriority
+            
+            # Map priority string to enum
+            priority_map = {
+                "Highest": TicketPriority.HIGHEST,
+                "High": TicketPriority.HIGH,
+                "Medium": TicketPriority.MEDIUM,
+                "Low": TicketPriority.LOW,
+                "Lowest": TicketPriority.LOWEST
+            }
+            
             ticket_request = TicketRequest(
                 summary=summary,
                 description=description,
                 project_key=state["jira_project"],
-                issue_type="Task"
+                issue_type="Task",
+                priority=priority_map.get(priority, TicketPriority.MEDIUM)
             )
             result = app_state["jira_handler"].jira_agent._handle_create_action(ticket_request)
             if result.get('success'):
@@ -120,13 +132,14 @@ def create_jira_ticket(summary, description, state: AgentState):
                 logger.error(f"JIRA handler failed: {result.get('error')}")
                 raise Exception(result.get('error', 'Unknown error'))
         else:
-            # Fallback to direct JIRA API
+            # Fallback to direct JIRA API with priority
             jira = JIRA(server=state["jira_domain"], basic_auth=(state["jira_email"], state["jira_token"]))
             issue_dict = {
                 'project': {'key': state["jira_project"]},
                 'summary': summary,
                 'description': description,
                 'issuetype': {'name': 'Task'},
+                'priority': {'name': priority}
             }
             issue = jira.create_issue(fields=issue_dict)
             return issue.key
@@ -151,25 +164,31 @@ def get_pr_status(pr_number: int, state: AgentState):
 
 # === Agent Implementations ===
 def requirement_agent_fn(state: AgentState) -> AgentState:
-    """Convert requirements to development tasks."""
+    """Convert requirements to development tasks, optimized for consolidation."""
     try:
         client = get_openai_client()
-        prompt = f"""Convert the following requirement into a list of development tasks:
+        prompt = f"""Convert the following requirement into development tasks that can be efficiently grouped into JIRA tickets:
 
 {state['intermediate_result']}
 
-Return as a numbered list of specific, actionable development tasks. Each task should be:
-- Clear and specific
-- Implementable by a developer
-- Focused on a single feature or component
-- Include testing where appropriate
+OPTIMIZATION CRITERIA:
+- Create logical, related tasks that can be consolidated
+- Focus on distinct features/components
+- Keep tasks at similar complexity levels
+- Maximum 8 tasks total
 
-Format: Return only the numbered list, one task per line."""
+FORMAT: Return ONLY a numbered list (1-8 items max):
+1. Task description
+2. Task description
+...
+
+Each task should be clear, specific, and implementable."""
 
         response = client.chat.completions.create(
             model=os.getenv("OPENAI_MODEL", "gpt-4"),
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3
+            temperature=0.2,
+            max_tokens=800
         )
         
         raw = response.choices[0].message.content.strip().split("\n")
@@ -181,10 +200,13 @@ Format: Return only the numbered list, one task per line."""
             if clean_line and any(c.isalpha() for c in clean_line):
                 tasks.append(clean_line)
         
+        # Limit to maximum 8 tasks for efficient processing
+        tasks = tasks[:8]
+        
         state["intermediate_result"] = tasks
         state["agent_results"]["RequirementAgent"] = tasks
-        state["agent_logs"].append(f"RequirementAgent generated {len(tasks)} tasks.")
-        logger.info(f"RequirementAgent generated {len(tasks)} tasks")
+        state["agent_logs"].append(f"RequirementAgent generated {len(tasks)} optimized tasks.")
+        logger.info(f"RequirementAgent generated {len(tasks)} tasks for consolidation")
         
     except Exception as e:
         logger.error(f"RequirementAgent error: {e}")
@@ -195,7 +217,7 @@ Format: Return only the numbered list, one task per line."""
     return state
 
 def jira_agent_fn(state: AgentState) -> AgentState:
-    """Create JIRA tickets from tasks with AI-generated descriptions."""
+    """Create optimized JIRA tickets with concise descriptions and ticket consolidation."""
     try:
         tasks = state.get("intermediate_result", [])
         if not tasks:
@@ -204,85 +226,99 @@ def jira_agent_fn(state: AgentState) -> AgentState:
             keys = []
             client = get_openai_client()
             
-            # Generate all descriptions in one API call for efficiency
-            logger.info(f"Generating descriptions for {len(tasks)} tasks...")
+            # Optimize ticket creation with consolidation and concise descriptions
+            logger.info(f"Optimizing and consolidating {len(tasks)} tasks...")
             tasks_list = "\n".join([f"{i+1}. {task}" for i, task in enumerate(tasks)])
             
-            bulk_prompt = f"""Create detailed professional JIRA descriptions for these development tasks:
+            optimization_prompt = f"""Analyze and optimize these development tasks for JIRA ticket creation:
 
 {tasks_list}
 
 Context: {state.get('user_input', 'Not specified')}
 
-For each task, provide a comprehensive description with:
-- **Overview**: Detailed explanation of what needs to be done (3-4 sentences)
-- **Background**: Why this task is important and how it fits into the project (2-3 sentences)
-- **Implementation Details**: Key technical approach and considerations (3-4 sentences)
-- **Acceptance Criteria**: Specific, testable requirements (minimum 5 criteria)
-- **Definition of Done**: Clear completion checklist
+OPTIMIZATION GOALS:
+1. **Consolidate similar tasks** into single tickets where logical
+2. **Create concise descriptions** (max 2-3 lines each)
+3. **Focus only on acceptance criteria** in descriptions
+4. **Assign intelligent priority** based on urgency, dependencies, and business impact
+5. **Minimize total ticket count** while maintaining clarity
 
-Each description MUST contain at least 10 sentences total. Be thorough and professional.
+PRIORITY GUIDELINES:
+- **Highest**: Security issues, critical bugs, blocking dependencies
+- **High**: Core functionality, user-facing features, performance issues
+- **Medium**: Enhancement features, refactoring, documentation
+- **Low**: Nice-to-have features, minor improvements, cleanup tasks
 
-Format as JSON array with objects containing "task_number" and "description" fields. Use JIRA markdown formatting."""
+OUTPUT FORMAT - JSON array:
+{{
+  "consolidated_tickets": [
+    {{
+      "title": "Brief, actionable title",
+      "description": "1-2 sentence overview.\\n\\n**Acceptance Criteria:**\\n- Criterion 1\\n- Criterion 2\\n- Criterion 3",
+      "priority": "High|Medium|Low|Highest",
+      "priority_reason": "Brief explanation of priority decision",
+      "original_tasks": ["task 1", "task 2"]
+    }}
+  ]
+}}
 
-            description_response = client.chat.completions.create(
+Keep descriptions under 150 words. Focus on WHAT needs to be done, not HOW."""
+
+            response = client.chat.completions.create(
                 model=os.getenv("OPENAI_MODEL", "gpt-4"),
-                messages=[{"role": "user", "content": bulk_prompt}],
-                temperature=0.2,
-                max_tokens=3000
+                messages=[{"role": "user", "content": optimization_prompt}],
+                temperature=0.1,
+                max_tokens=1500
             )
             
-            # Parse the response to extract descriptions
-            descriptions = {}
+            # Parse optimized tickets
             try:
                 import json
-                response_data = json.loads(description_response.choices[0].message.content.strip())
-                for item in response_data:
-                    descriptions[item["task_number"]] = item["description"]
-            except Exception:
-                # Fallback: use detailed descriptions if JSON parsing fails
-                for i, task in enumerate(tasks, 1):
-                    descriptions[i] = f"""**Overview**: {task}. This task is essential for the overall project functionality and user experience. It requires careful implementation to ensure scalability and maintainability. The solution should follow best practices and coding standards.
-
-**Background**: This feature is critical for meeting the project requirements and user expectations. It will integrate with existing system components and may affect other parts of the application. Proper implementation will enhance the overall system architecture.
-
-**Implementation Details**: The development should use appropriate design patterns and follow the existing codebase structure. Consider performance implications and potential edge cases during implementation. Ensure proper error handling and logging are implemented throughout the solution.
-
-**Acceptance Criteria**:
-- Feature implementation is complete and functional
-- All unit tests pass with minimum 80% code coverage
-- Integration tests are written and passing
-- Code follows project coding standards and guidelines
-- Documentation is updated including API docs if applicable
-- Performance requirements are met under expected load
-- Security considerations are addressed appropriately
-
-**Definition of Done**:
-- Code is reviewed and approved by team lead
-- All automated tests are passing
-- Feature is deployed to staging environment
-- QA testing is completed successfully"""
-            
-            # Create tickets with generated descriptions
-            for i, task in enumerate(tasks, 1):
-                try:
-                    logger.info(f"Creating JIRA ticket for task: {task}")
-                    
-                    description = descriptions.get(i, f"Task: {task}")
-                    metadata = f"\n\n---\n*Auto-generated by SprintAgent*\n*Created:* {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-                    final_description = description + metadata
-                    
-                    key = create_jira_ticket(task, final_description, state)
-                    keys.append(key)
-                    logger.info(f"Created ticket: {key}")
-                    
-                except Exception as e:
-                    logger.error(f"Error creating ticket for task '{task}': {str(e)}")
-                    keys.append(f"ERROR: {str(e)}")
+                response_data = json.loads(response.choices[0].message.content.strip())
+                tickets = response_data.get("consolidated_tickets", [])
+                
+                logger.info(f"✅ Consolidated {len(tasks)} tasks into {len(tickets)} optimized tickets")
+                
+                # Create consolidated tickets
+                for ticket in tickets:
+                    try:
+                        title = ticket["title"]
+                        description = ticket["description"]
+                        priority = ticket.get("priority", "Medium")
+                        priority_reason = ticket.get("priority_reason", "")
+                        
+                        # Add priority information to description
+                        priority_info = f"\n\n**Priority:** {priority}"
+                        if priority_reason:
+                            priority_info += f" - {priority_reason}"
+                        
+                        # Add minimal metadata
+                        metadata = f"{priority_info}\n\n---\n*Auto-generated • {datetime.now().strftime('%Y-%m-%d %H:%M')}*"
+                        final_description = description + metadata
+                        
+                        logger.info(f"Creating consolidated ticket: {title} (Priority: {priority})")
+                        key = create_jira_ticket(title, final_description, state, priority)
+                        keys.append(key)
+                        
+                    except Exception as e:
+                        logger.error(f"Error creating consolidated ticket '{title}': {str(e)}")
+                        keys.append(f"ERROR: {str(e)}")
+                        
+            except Exception as parse_error:
+                logger.warning(f"Failed to parse optimization response: {parse_error}")
+                # Fallback: create individual tickets with minimal descriptions
+                for task in tasks[:3]:  # Limit to 3 tickets max as fallback
+                    try:
+                        description = f"Implementation of: {task}\n\n**Acceptance Criteria:**\n- Feature is implemented and functional\n- Code follows project standards\n- Tests are passing"
+                        key = create_jira_ticket(task, description, state, "Medium")
+                        keys.append(key)
+                    except Exception as e:
+                        logger.error(f"Error creating fallback ticket: {str(e)}")
+                        keys.append(f"ERROR: {str(e)}")
             
             state["intermediate_result"] = keys
             state["agent_results"]["JiraAgent"] = keys
-            state["agent_logs"].append(f"JiraAgent created {len(keys)} tickets with bulk-generated descriptions.")
+            state["agent_logs"].append(f"JiraAgent created {len(keys)} optimized tickets.")
             
     except Exception as e:
         logger.error(f"JiraAgent error: {e}")
