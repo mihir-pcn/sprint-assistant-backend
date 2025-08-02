@@ -20,9 +20,20 @@ command_exists() {
 # Check for required tools
 echo "🔍 Checking requirements..."
 
+# Check Python version
+PYTHON_VERSION=$(python3 --version 2>&1 | cut -d' ' -f2)
+REQUIRED_VERSION="3.12"
+
 if ! command_exists python3; then
     echo "❌ Python 3 is required but not installed"
     exit 1
+fi
+
+echo "✅ Python version: $PYTHON_VERSION"
+
+# Check if Python version is compatible
+if [[ "$PYTHON_VERSION" < "$REQUIRED_VERSION" ]]; then
+    echo "⚠️  Warning: Python $REQUIRED_VERSION+ recommended (you have $PYTHON_VERSION)"
 fi
 
 if ! command_exists pip; then
@@ -47,15 +58,36 @@ case $choice in
     1)
         echo ""
         echo "📦 Installing dependencies..."
-        pip install -r requirements.txt
+        
+        # Use virtual environment if it exists, otherwise use system pip
+        if [ -d ".venv" ]; then
+            echo "✅ Using existing virtual environment"
+            source .venv/bin/activate
+            pip install -r requirements.txt
+        else
+            echo "🔧 Creating virtual environment..."
+            python3 -m venv .venv
+            source .venv/bin/activate
+            pip install --upgrade pip
+            pip install -r requirements.txt
+        fi
         
         echo ""
-        echo "🧪 Starting local server for testing..."
-        echo "API will be available at: http://localhost:8000"
-        echo "API docs at: http://localhost:8000/docs"
-        echo "Press Ctrl+C to stop"
-        echo ""
-        python3 sprint_agent_api.py
+        echo "🧪 Running build verification tests..."
+        python test_build.py
+        
+        if [ $? -eq 0 ]; then
+            echo ""
+            echo "🚀 Starting local server for testing..."
+            echo "API will be available at: http://localhost:8000"
+            echo "API docs at: http://localhost:8000/docs"
+            echo "Press Ctrl+C to stop"
+            echo ""
+            uvicorn sprint_agent_api:app --host 127.0.0.1 --port 8000 --reload
+        else
+            echo "❌ Build verification failed. Please fix issues before running."
+            exit 1
+        fi
         ;;
     
     2)
@@ -68,13 +100,22 @@ case $choice in
     3)
         echo ""
         echo "🐳 Testing Docker container..."
-        echo "Building image first..."
+        echo "Building image with Python 3.12.4..."
         docker build -t sprint-assistant-backend .
         
-        echo "Starting container on port 8000..."
-        echo "API will be available at: http://localhost:8000"
-        echo "Press Ctrl+C to stop"
-        docker run -p 8000:8000 --env-file .env sprint-assistant-backend
+        echo ""
+        echo "🧪 Running build verification in Docker..."
+        docker run --rm sprint-assistant-backend python test_build.py
+        
+        if [ $? -eq 0 ]; then
+            echo "Starting container on port 8000..."
+            echo "API will be available at: http://localhost:8000"
+            echo "Press Ctrl+C to stop"
+            docker run -p 8000:8000 --env-file .env sprint-assistant-backend
+        else
+            echo "❌ Docker build verification failed"
+            exit 1
+        fi
         ;;
     
     4)
