@@ -1,0 +1,23 @@
+# JIRA Handler Dependencies
+# Core JIRA API client
+jira==3.8.0
+
+# Environment variable management
+python-dotenv==1.0.0
+
+# Type hints (Python < 3.9 compatibility)
+typing-extensions==4.7.1
+
+# Data validation and parsing
+pydantic==2.8.2
+
+# HTTP requests (used by jira package)
+requests==2.31.0
+
+# Additional dependencies for pydantic
+pydantic-core==2.20.1
+
+# JSON handling and utilities
+# (Built-in json module is sufficient, no additional requirements)
+
+# Logging (built-in logging module is sufficient)

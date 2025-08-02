@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sprint Agent API Testing Interface</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        padding: 20px;
+      }
+
+      .container {
+        max-width: 1200px;
+        margin: 0 auto;
+        background: white;
+        border-radius: 15px;
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+        overflow: hidden;
+      }
+
+      .header {
+        background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+        color: white;
+        padding: 30px 40px;
+        text-align: center;
+      }
+
+      .header h1 {
+        font-size: 2.5em;
+        margin-bottom: 10px;
+        font-weight: 300;
+      }
+
+      .header p {
+        font-size: 1.1em;
+        opacity: 0.9;
+      }
+
+      .status-bar {
+        background: #ecf0f1;
+        padding: 15px 40px;
+        border-bottom: 1px solid #bdc3c7;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      .status-indicator {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 16px;
+        border-radius: 20px;
+        font-weight: 500;
+        font-size: 0.9em;
+      }
+
+      .status-healthy {
+        background: #d4edda;
+        color: #155724;
+      }
+
+      .status-degraded {
+        background: #fff3cd;
+        color: #856404;
+      }
+
+      .status-error {
+        background: #f8d7da;
+        color: #721c24;
+      }
+
+      .main-content {
+        padding: 40px;
+      }
+
+      .api-section {
+        margin-bottom: 40px;
+        border: 1px solid #e1e8ed;
+        border-radius: 10px;
+        overflow: hidden;
+      }
+
+      .section-header {
+        background: #f8f9fa;
+        padding: 20px 30px;
+        border-bottom: 1px solid #e1e8ed;
+        display: flex;
+        justify-content: between;
+        align-items: center;
+      }
+
+      .section-title {
+        font-size: 1.4em;
+        font-weight: 600;
+        color: #2c3e50;
+        margin: 0;
+      }
+
+      .method-badge {
+        padding: 4px 12px;
+        border-radius: 4px;
+        font-size: 0.8em;
+        font-weight: bold;
+        margin-left: auto;
+      }
+
+      .method-get {
+        background: #d4edda;
+        color: #155724;
+      }
+
+      .method-post {
+        background: #cce5ff;
+        color: #004085;
+      }
+
+      .section-content {
+        padding: 30px;
+      }
+
+      .form-group {
+        margin-bottom: 25px;
+      }
+
+      .form-label {
+        display: block;
+        margin-bottom: 8px;
+        font-weight: 600;
+        color: #34495e;
+      }
+
+      .form-input {
+        width: 100%;
+        padding: 12px 16px;
+        border: 2px solid #e1e8ed;
+        border-radius: 8px;
+        font-size: 1em;
+        transition: border-color 0.3s ease;
+      }
+
+      .form-input:focus {
+        outline: none;
+        border-color: #667eea;
+      }
+
+      .form-textarea {
+        min-height: 120px;
+        resize: vertical;
+        font-family: "Courier New", monospace;
+      }
+
+      .btn {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        padding: 14px 28px;
+        border-radius: 8px;
+        font-size: 1em;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        margin-right: 10px;
+      }
+
+      .btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
+      }
+
+      .btn-secondary {
+        background: linear-gradient(135deg, #95a5a6 0%, #7f8c8d 100%);
+      }
+
+      .response-container {
+        margin-top: 25px;
+        border: 2px solid #e1e8ed;
+        border-radius: 8px;
+        overflow: hidden;
+      }
+
+      .response-header {
+        background: #f8f9fa;
+        padding: 15px 20px;
+        font-weight: 600;
+        color: #2c3e50;
+        border-bottom: 1px solid #e1e8ed;
+      }
+
+      .response-content {
+        padding: 20px;
+        background: #2c3e50;
+        color: #ecf0f1;
+        font-family: "Courier New", monospace;
+        font-size: 0.9em;
+        line-height: 1.6;
+        max-height: 400px;
+        overflow-y: auto;
+      }
+
+      .loading {
+        text-align: center;
+        color: #667eea;
+        font-style: italic;
+      }
+
+      .examples {
+        background: #f8f9fa;
+        border-radius: 8px;
+        padding: 20px;
+        margin-top: 20px;
+      }
+
+      .examples h4 {
+        color: #2c3e50;
+        margin-bottom: 15px;
+      }
+
+      .example-item {
+        background: white;
+        border: 1px solid #e1e8ed;
+        border-radius: 6px;
+        padding: 12px;
+        margin-bottom: 10px;
+        cursor: pointer;
+        transition: border-color 0.2s ease;
+      }
+
+      .example-item:hover {
+        border-color: #667eea;
+      }
+
+      .example-title {
+        font-weight: 600;
+        color: #2c3e50;
+        margin-bottom: 5px;
+      }
+
+      .example-text {
+        color: #7f8c8d;
+        font-size: 0.9em;
+      }
+
+      @media (max-width: 768px) {
+        .container {
+          margin: 10px;
+          border-radius: 10px;
+        }
+
+        .header {
+          padding: 20px;
+        }
+
+        .header h1 {
+          font-size: 2em;
+        }
+
+        .main-content {
+          padding: 20px;
+        }
+
+        .status-bar {
+          padding: 15px 20px;
+          flex-direction: column;
+          gap: 10px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>🚀 Sprint Agent API Testing</h1>
+        <p>Test your multi-agent system with natural language requirements</p>
+      </div>
+
+      <div class="status-bar">
+        <div id="server-status" class="status-indicator status-error">
+          <span>⚠️</span>
+          <span>Checking server status...</span>
+        </div>
+        <div id="last-updated">
+          <small>Last updated: <span id="timestamp">-</span></small>
+        </div>
+      </div>
+
+      <div class="main-content">
+        <!-- Health Check Section -->
+        <div class="api-section">
+          <div class="section-header">
+            <h3 class="section-title">🏥 Health Check</h3>
+            <span class="method-badge method-get">GET</span>
+          </div>
+          <div class="section-content">
+            <p style="margin-bottom: 20px; color: #7f8c8d">
+              Check the status of all system components including OpenAI, JIRA,
+              and LangGraph.
+            </p>
+
+            <button class="btn" onclick="checkHealth()">
+              Check System Health
+            </button>
+            <button
+              class="btn btn-secondary"
+              onclick="clearResponse('health-response')"
+            >
+              Clear
+            </button>
+
+            <div
+              id="health-response"
+              class="response-container"
+              style="display: none"
+            >
+              <div class="response-header">Health Check Response</div>
+              <div class="response-content"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Process Requirement Section -->
+        <div class="api-section">
+          <div class="section-header">
+            <h3 class="section-title">⚡ Process Requirement</h3>
+            <span class="method-badge method-post">POST</span>
+          </div>
+          <div class="section-content">
+            <p style="margin-bottom: 20px; color: #7f8c8d">
+              Send natural language requirements to be processed by the
+              multi-agent system and converted into JIRA tickets.
+            </p>
+
+            <div class="form-group">
+              <label class="form-label" for="requirement-input"
+                >Natural Language Requirement:</label
+              >
+              <textarea
+                id="requirement-input"
+                class="form-input form-textarea"
+                placeholder="Enter your software requirement in natural language...
+                            
+Examples:
+• Build a user authentication system with login and signup
+• Create a dashboard with analytics and reporting features  
+• Implement a REST API for user management
+• Add email notification functionality"
+              ></textarea>
+            </div>
+
+            <button class="btn" onclick="processRequirement()">
+              Process Requirement
+            </button>
+            <button
+              class="btn btn-secondary"
+              onclick="clearResponse('process-response')"
+            >
+              Clear
+            </button>
+
+            <div class="examples">
+              <h4>💡 Example Requirements (Click to use):</h4>
+              <div
+                class="example-item"
+                onclick="setRequirement('Build a user authentication system with login, signup, password reset, and email verification functionality')"
+              >
+                <div class="example-title">User Authentication System</div>
+                <div class="example-text">
+                  Complete auth system with login, signup, password reset, and
+                  email verification
+                </div>
+              </div>
+              <div
+                class="example-item"
+                onclick="setRequirement('Create a real-time chat application with message history, file sharing, and user presence indicators')"
+              >
+                <div class="example-title">Real-time Chat Application</div>
+                <div class="example-text">
+                  Chat app with message history, file sharing, and presence
+                  indicators
+                </div>
+              </div>
+              <div
+                class="example-item"
+                onclick="setRequirement('Implement a REST API for e-commerce with product catalog, shopping cart, and payment processing')"
+              >
+                <div class="example-title">E-commerce REST API</div>
+                <div class="example-text">
+                  Complete e-commerce API with catalog, cart, and payments
+                </div>
+              </div>
+              <div
+                class="example-item"
+                onclick="setRequirement('Build a task management system with kanban boards, time tracking, and team collaboration features')"
+              >
+                <div class="example-title">Task Management System</div>
+                <div class="example-text">
+                  Kanban boards, time tracking, and team collaboration
+                </div>
+              </div>
+              <div
+                class="example-item"
+                onclick="setRequirement('Create a data analytics dashboard with charts, filtering, and export capabilities')"
+              >
+                <div class="example-title">Analytics Dashboard</div>
+                <div class="example-text">
+                  Interactive dashboard with charts, filters, and data export
+                </div>
+              </div>
+            </div>
+
+            <div
+              id="process-response"
+              class="response-container"
+              style="display: none"
+            >
+              <div class="response-header">Processing Response</div>
+              <div class="response-content"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- API Documentation Section -->
+        <div class="api-section">
+          <div class="section-header">
+            <h3 class="section-title">📚 API Documentation</h3>
+            <span class="method-badge method-get">GET</span>
+          </div>
+          <div class="section-content">
+            <p style="margin-bottom: 20px; color: #7f8c8d">
+              Access the interactive API documentation powered by FastAPI and
+              Swagger UI.
+            </p>
+
+            <button class="btn" onclick="openDocs()">Open API Docs</button>
+            <button class="btn btn-secondary" onclick="openReDoc()">
+              Open ReDoc
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const API_BASE = "http://127.0.0.1:8000";
+
+      // Auto-check server status on load
+      document.addEventListener("DOMContentLoaded", function () {
+        checkHealth();
+        updateTimestamp();
+      });
+
+      function updateTimestamp() {
+        document.getElementById("timestamp").textContent =
+          new Date().toLocaleTimeString();
+      }
+
+      function updateServerStatus(isHealthy, message) {
+        const statusEl = document.getElementById("server-status");
+        statusEl.className =
+          "status-indicator " + (isHealthy ? "status-healthy" : "status-error");
+        statusEl.innerHTML = `<span>${
+          isHealthy ? "✅" : "❌"
+        }</span><span>${message}</span>`;
+        updateTimestamp();
+      }
+
+      async function checkHealth() {
+        const responseDiv = document.getElementById("health-response");
+        const responseContent = responseDiv.querySelector(".response-content");
+
+        showResponse("health-response", "Checking system health...");
+
+        try {
+          const response = await fetch(`${API_BASE}/health`);
+          const data = await response.json();
+
+          // Update server status
+          const isHealthy = data.status === "healthy";
+          updateServerStatus(
+            isHealthy,
+            `Server ${data.status}: ${data.message}`
+          );
+
+          // Show detailed response
+          responseContent.innerHTML = formatJsonResponse(data);
+        } catch (error) {
+          updateServerStatus(false, "Server unreachable");
+          responseContent.innerHTML = `<span style="color: #e74c3c;">Error: ${error.message}</span>
+                
+<strong>Troubleshooting:</strong>
+1. Make sure the FastAPI server is running:
+   cd "/Users/mihirk/Desktop/sprint agent"
+   source venv/bin/activate
+   uvicorn sprint_agent_api:app --host 127.0.0.1 --port 8000
+
+2. Check if port 8000 is available:
+   netstat -an | grep 8000
+
+3. Verify the server is accessible:
+   curl http://127.0.0.1:8000/health`;
+        }
+      }
+
+      async function processRequirement() {
+        const requirement = document
+          .getElementById("requirement-input")
+          .value.trim();
+        if (!requirement) {
+          alert("Please enter a requirement first!");
+          return;
+        }
+
+        const responseDiv = document.getElementById("process-response");
+        const responseContent = responseDiv.querySelector(".response-content");
+
+        showResponse(
+          "process-response",
+          "Processing requirement through multi-agent system...\n\nThis may take 30-60 seconds as the system:\n1. Analyzes your requirement with AI\n2. Generates detailed tasks\n3. Creates JIRA tickets\n4. Returns the results"
+        );
+
+        try {
+          const response = await fetch(`${API_BASE}/process`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ requirement: requirement }),
+          });
+
+          const data = await response.json();
+
+          if (response.ok) {
+            responseContent.innerHTML = formatProcessResponse(data);
+          } else {
+            responseContent.innerHTML = `<span style="color: #e74c3c;">Error ${
+              response.status
+            }: ${data.detail || data.message || "Unknown error"}</span>`;
+          }
+        } catch (error) {
+          responseContent.innerHTML = `<span style="color: #e74c3c;">Network Error: ${error.message}</span>
+                
+<strong>Possible causes:</strong>
+1. FastAPI server not running
+2. Network connectivity issues
+3. CORS policy blocking the request`;
+        }
+      }
+
+      function setRequirement(text) {
+        document.getElementById("requirement-input").value = text;
+      }
+
+      function showResponse(containerId, content) {
+        const container = document.getElementById(containerId);
+        const contentDiv = container.querySelector(".response-content");
+        container.style.display = "block";
+        contentDiv.innerHTML = content;
+        container.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+
+      function clearResponse(containerId) {
+        document.getElementById(containerId).style.display = "none";
+      }
+
+      function formatJsonResponse(data) {
+        return `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+      }
+
+      function formatProcessResponse(data) {
+        let html = `<div style="color: #2ecc71; font-weight: bold; margin-bottom: 15px;">
+                ✅ ${data.success ? "SUCCESS" : "PARTIAL SUCCESS"}: ${
+          data.message
+        }
+            </div>`;
+
+        if (data.tasks && data.tasks.length > 0) {
+          html += `<div style="margin-bottom: 20px;">
+                    <strong style="color: #3498db;">📋 Generated Tasks (${data.tasks.length}):</strong>
+                    <ol style="margin-left: 20px; margin-top: 10px;">`;
+
+          data.tasks.forEach((task) => {
+            html += `<li style="margin-bottom: 8px; line-height: 1.4;">${task}</li>`;
+          });
+
+          html += `</ol></div>`;
+        }
+
+        if (data.jira_tickets && data.jira_tickets.length > 0) {
+          html += `<div style="margin-bottom: 20px;">
+                    <strong style="color: #e67e22;">🎫 JIRA Tickets Created (${data.jira_tickets.length}):</strong>
+                    <ul style="margin-left: 20px; margin-top: 10px;">`;
+
+          data.jira_tickets.forEach((ticket) => {
+            html += `<li style="margin-bottom: 5px; color: #27ae60;">✅ ${ticket}</li>`;
+          });
+
+          html += `</ul></div>`;
+        }
+
+        if (data.summary) {
+          html += `<div style="border-top: 1px solid #555; padding-top: 15px; margin-top: 20px;">
+                    <strong style="color: #9b59b6;">📊 Summary:</strong>
+                    <div style="margin-top: 10px; margin-left: 20px;">
+                        <div>Tasks Generated: <span style="color: #3498db;">${
+                          data.summary.tasks_generated || 0
+                        }</span></div>
+                        <div>Tickets Created: <span style="color: #27ae60;">${
+                          data.summary.tickets_created || 0
+                        }</span></div>
+                        <div>Errors: <span style="color: ${
+                          data.summary.errors > 0 ? "#e74c3c" : "#27ae60"
+                        };">${data.summary.errors || 0}</span></div>
+                    </div>
+                </div>`;
+        }
+
+        return html;
+      }
+
+      function openDocs() {
+        window.open(`${API_BASE}/docs`, "_blank");
+      }
+
+      function openReDoc() {
+        window.open(`${API_BASE}/redoc`, "_blank");
+      }
+    </script>
+  </body>
+</html>
