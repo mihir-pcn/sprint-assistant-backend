@@ -13,4 +13,3 @@ typing-extensions>=4.8.0
 # Additional dependencies for the jira_agent module
 pydantic==2.8.2
 requests==2.31.0
-pydantic-core==2.20.1

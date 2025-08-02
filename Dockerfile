@@ -7,10 +7,12 @@ ENV PYTHONPATH=/app
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies and create user in one layer
 RUN apt-get update && apt-get install -y \
     gcc \
-    && rm -rf /var/lib/apt/lists/*
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -r appuser && useradd -r -g appuser appuser
 
 # Copy requirements first for better caching
 COPY requirements.txt .
@@ -22,8 +24,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copy the application code
 COPY . .
 
-# Create non-root user for security
-RUN groupadd -r appuser && useradd -r -g appuser appuser
+# Set ownership
 RUN chown -R appuser:appuser /app
 USER appuser
 
