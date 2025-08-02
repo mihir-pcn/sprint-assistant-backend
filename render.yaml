@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: sprint-assistant-backend
+    runtime: python
+    buildCommand: ./render-build.sh
+    startCommand: uvicorn sprint_agent_api:app --host 0.0.0.0 --port $PORT
+    plan: free
+    healthCheckPath: /health
+    region: oregon
+    buildFilter:
+      paths:
+      - "**"
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.4"
+      - key: PYTHONPATH
+        value: "/opt/render/project/src"
+      - sync: false
+    autoDeploy: true
