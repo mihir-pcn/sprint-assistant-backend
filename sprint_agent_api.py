@@ -58,6 +58,7 @@ class ProcessResponseModel(BaseModel):
     data: Optional[Dict[str, Any]] = None
     tasks: Optional[List[str]] = None
     jira_keys: Optional[List[str]] = None
+    jira_tickets: Optional[List[Dict[str, Any]]] = None  # Add support for full ticket data
     pr_statuses: Optional[List[Dict[str, Any]]] = None
     error: Optional[str] = None
 
@@ -103,7 +104,7 @@ def get_openai_client():
 
 # === JIRA + GitHub Functions ===
 def create_jira_ticket(summary, description, state: AgentState, priority="Medium"):
-    """Create JIRA ticket using the jira_agent handler with priority support."""
+    """Create JIRA ticket using the jira_agent handler with priority support and return detailed info."""
     try:
         if app_state["jira_handler"]:
             # Use the advanced jira_agent handler
@@ -127,7 +128,13 @@ def create_jira_ticket(summary, description, state: AgentState, priority="Medium
             )
             result = app_state["jira_handler"].jira_agent._handle_create_action(ticket_request)
             if result.get('success'):
-                return result['data']['ticket_key']
+                # Return detailed ticket info instead of just key
+                return {
+                    "key": result['data']['ticket_key'],
+                    "priority": priority,
+                    "jira_status": "To Do",
+                    "summary": summary
+                }
             else:
                 logger.error(f"JIRA handler failed: {result.get('error')}")
                 raise Exception(result.get('error', 'Unknown error'))
@@ -142,7 +149,12 @@ def create_jira_ticket(summary, description, state: AgentState, priority="Medium
                 'priority': {'name': priority}
             }
             issue = jira.create_issue(fields=issue_dict)
-            return issue.key
+            return {
+                "key": issue.key,
+                "priority": priority,
+                "jira_status": "To Do",
+                "summary": summary
+            }
     except Exception as e:
         logger.error(f"Error creating JIRA ticket: {str(e)}")
         return f"ERROR: {str(e)}"
@@ -217,20 +229,107 @@ Each task should be clear, specific, and implementable."""
     return state
 
 def jira_agent_fn(state: AgentState) -> AgentState:
-    """Create optimized JIRA tickets with concise descriptions and ticket consolidation."""
+    """JIRA agent with AI-powered intent validation and action routing."""
     try:
-        tasks = state.get("intermediate_result", [])
-        if not tasks:
-            state["agent_logs"].append("JiraAgent skipped (no tasks to create).")
-        else:
-            keys = []
-            client = get_openai_client()
+        # First, validate the JIRA intent using AI
+        client = get_openai_client()
+        
+        validation_prompt = f"""You are a JIRA Action Validator. Analyze the user's request and determine the specific JIRA action required.
+
+User request: "{state.get('user_input', '')}"
+
+SUPPORTED ACTIONS:
+- CREATE: Create new tickets/tasks/issues, generate development tasks from requirements
+- FETCH: View/check status of existing tickets, get ticket details, list tickets
+
+UNSUPPORTED ACTIONS:
+- Update/edit/modify existing tickets
+- Delete/remove tickets  
+- Close/resolve/cancel tickets
+- Change ticket status, priority, assignee
+- Add comments or attachments to existing tickets
+
+If the request is to fetch a specific ticket, respond with "FETCH" and extract the ticket key from the user request.
+Otherwise respond with ONLY one word: CREATE, FETCH, or UNSUPPORTED"""
+
+        response = client.chat.completions.create(
+            model=os.getenv("OPENAI_MODEL", "gpt-4"),
+            messages=[{"role": "user", "content": validation_prompt}],
+            temperature=0.1,
+            max_tokens=50
+        )
+        
+        action = response.choices[0].message.content.strip().upper()
+        logger.info(f"JIRA Agent detected action: {action}")
+        
+        if action == "UNSUPPORTED":
+            # Block unsupported actions
+            state["agent_logs"].append("Unsupported action. Could not proceed with your request")
+            state["intermediate_result"] = []
+            state["agent_results"]["JiraAgent"] = []
             
-            # Optimize ticket creation with consolidation and concise descriptions
-            logger.info(f"Optimizing and consolidating {len(tasks)} tasks...")
-            tasks_list = "\n".join([f"{i+1}. {task}" for i, task in enumerate(tasks)])
+        elif action == "FETCH" or action.startswith("FETCH"):
+            # Handle fetch operations (get ticket details, status, etc.)
+            state["agent_logs"].append("JiraAgent processing fetch request")
             
-            optimization_prompt = f"""Analyze and optimize these development tasks for JIRA ticket creation:
+            # Extract ticket key from user input using regex
+            import re
+            user_input = state.get('user_input', '')
+            ticket_pattern = r'\b([A-Z]+[-_]\d+)\b'
+            ticket_matches = re.findall(ticket_pattern, user_input)
+            
+            if ticket_matches:
+                # Found specific ticket key(s) in user input
+                fetch_results = []
+                for ticket_key in ticket_matches:
+                    try:
+                        jira = JIRA(server=state["jira_domain"], basic_auth=(state["jira_email"], state["jira_token"]))
+                        issue = jira.issue(ticket_key)
+                        
+                        # Extract fields safely
+                        issue_data = {
+                            "key": issue.key,
+                            "summary": issue.fields.summary,
+                            "status": issue.fields.status.name if issue.fields.status else "Unknown",
+                            "assignee": issue.fields.assignee.displayName if issue.fields.assignee else "Unassigned",
+                            "description": issue.fields.description if issue.fields.description else "No description",
+                            "reporter": issue.fields.reporter.displayName if issue.fields.reporter else "Unknown",
+                            "created": str(issue.fields.created) if issue.fields.created else "Unknown",
+                            "updated": str(issue.fields.updated) if issue.fields.updated else "Unknown",
+                            "priority": issue.fields.priority.name if issue.fields.priority else "No priority"
+                        }
+                        fetch_results.append(issue_data)
+                        logger.info(f"Fetched ticket: {ticket_key}")
+                        
+                    except Exception as e:
+                        error_data = {"key": ticket_key, "error": f"Failed to fetch ticket: {str(e)}"}
+                        fetch_results.append(error_data)
+                        logger.error(f"Error fetching ticket {ticket_key}: {str(e)}")
+                
+                state["intermediate_result"] = fetch_results
+                state["agent_results"]["JiraAgent"] = fetch_results
+                state["agent_logs"].append(f"JiraAgent fetched {len(fetch_results)} ticket(s)")
+                
+            else:
+                # No specific ticket key found, return general message
+                fetch_result = {"message": "Please specify a ticket key (e.g., PROJ-123) to fetch details"}
+                state["intermediate_result"] = [fetch_result]
+                state["agent_results"]["JiraAgent"] = [fetch_result]
+                state["agent_logs"].append("JiraAgent: No specific ticket key found in request")
+            
+        elif action == "CREATE":
+            # Handle create operations (existing ticket creation logic)
+            tasks = state.get("intermediate_result", [])
+            if not tasks:
+                state["agent_logs"].append("JiraAgent skipped (no tasks to create).")
+            else:
+                keys = []
+                
+                # Optimize ticket creation with consolidation and concise descriptions
+                logger.info(f"Optimizing and consolidating {len(tasks)} tasks...")
+                tasks_list = "\n".join([f"{i+1}. {task}" for i, task in enumerate(tasks)])
+                
+                optimization_prompt = f"""Analyze and optimize these development tasks for JIRA ticket creation:
 
 {tasks_list}
 
@@ -264,61 +363,72 @@ OUTPUT FORMAT - JSON array:
 
 Keep descriptions under 150 words. Focus on WHAT needs to be done, not HOW."""
 
-            response = client.chat.completions.create(
-                model=os.getenv("OPENAI_MODEL", "gpt-4"),
-                messages=[{"role": "user", "content": optimization_prompt}],
-                temperature=0.1,
-                max_tokens=1500
-            )
-            
-            # Parse optimized tickets
-            try:
-                import json
-                response_data = json.loads(response.choices[0].message.content.strip())
-                tickets = response_data.get("consolidated_tickets", [])
+                response = client.chat.completions.create(
+                    model=os.getenv("OPENAI_MODEL", "gpt-4"),
+                    messages=[{"role": "user", "content": optimization_prompt}],
+                    temperature=0.1,
+                    max_tokens=1500
+                )
                 
-                logger.info(f"✅ Consolidated {len(tasks)} tasks into {len(tickets)} optimized tickets")
+                # Parse optimized tickets
+                try:
+                    import json
+                    response_data = json.loads(response.choices[0].message.content.strip())
+                    tickets = response_data.get("consolidated_tickets", [])
+                    
+                    logger.info(f"✅ Consolidated {len(tasks)} tasks into {len(tickets)} optimized tickets")
+                    
+                    # Create consolidated tickets
+                    for ticket in tickets:
+                        try:
+                            title = ticket["title"]
+                            description = ticket["description"]
+                            priority = ticket.get("priority", "Medium")
+                            priority_reason = ticket.get("priority_reason", "")
+                            
+                            # Add priority information to description
+                            priority_info = f"\n\n**Priority:** {priority}"
+                            if priority_reason:
+                                priority_info += f" - {priority_reason}"
+                            
+                            # Add minimal metadata
+                            metadata = f"{priority_info}\n\n---\n*Auto-generated • {datetime.now().strftime('%Y-%m-%d %H:%M')}*"
+                            final_description = description + metadata
+                            
+                            logger.info(f"Creating consolidated ticket: {title} (Priority: {priority})")
+                            ticket_info = create_jira_ticket(title, final_description, state, priority)
+                            if isinstance(ticket_info, dict):
+                                keys.append(ticket_info["key"])
+                            else:
+                                keys.append(ticket_info)  # Error case or string key
+                            
+                        except Exception as e:
+                            logger.error(f"Error creating consolidated ticket '{title}': {str(e)}")
+                            keys.append(f"ERROR: {str(e)}")
+                            
+                except Exception as parse_error:
+                    logger.warning(f"Failed to parse optimization response: {parse_error}")
+                    # Fallback: create individual tickets with minimal descriptions
+                    for task in tasks[:3]:  # Limit to 3 tickets max as fallback
+                        try:
+                            description = f"Implementation of: {task}\n\n**Acceptance Criteria:**\n- Feature is implemented and functional\n- Code follows project standards\n- Tests are passing"
+                            ticket_info = create_jira_ticket(task, description, state, "Medium")
+                            if isinstance(ticket_info, dict):
+                                keys.append(ticket_info["key"])
+                            else:
+                                keys.append(ticket_info)  # Error case or string key
+                        except Exception as e:
+                            logger.error(f"Error creating fallback ticket: {str(e)}")
+                            keys.append(f"ERROR: {str(e)}")
                 
-                # Create consolidated tickets
-                for ticket in tickets:
-                    try:
-                        title = ticket["title"]
-                        description = ticket["description"]
-                        priority = ticket.get("priority", "Medium")
-                        priority_reason = ticket.get("priority_reason", "")
-                        
-                        # Add priority information to description
-                        priority_info = f"\n\n**Priority:** {priority}"
-                        if priority_reason:
-                            priority_info += f" - {priority_reason}"
-                        
-                        # Add minimal metadata
-                        metadata = f"{priority_info}\n\n---\n*Auto-generated • {datetime.now().strftime('%Y-%m-%d %H:%M')}*"
-                        final_description = description + metadata
-                        
-                        logger.info(f"Creating consolidated ticket: {title} (Priority: {priority})")
-                        key = create_jira_ticket(title, final_description, state, priority)
-                        keys.append(key)
-                        
-                    except Exception as e:
-                        logger.error(f"Error creating consolidated ticket '{title}': {str(e)}")
-                        keys.append(f"ERROR: {str(e)}")
-                        
-            except Exception as parse_error:
-                logger.warning(f"Failed to parse optimization response: {parse_error}")
-                # Fallback: create individual tickets with minimal descriptions
-                for task in tasks[:3]:  # Limit to 3 tickets max as fallback
-                    try:
-                        description = f"Implementation of: {task}\n\n**Acceptance Criteria:**\n- Feature is implemented and functional\n- Code follows project standards\n- Tests are passing"
-                        key = create_jira_ticket(task, description, state, "Medium")
-                        keys.append(key)
-                    except Exception as e:
-                        logger.error(f"Error creating fallback ticket: {str(e)}")
-                        keys.append(f"ERROR: {str(e)}")
-            
-            state["intermediate_result"] = keys
-            state["agent_results"]["JiraAgent"] = keys
-            state["agent_logs"].append(f"JiraAgent created {len(keys)} optimized tickets.")
+                state["intermediate_result"] = keys
+                state["agent_results"]["JiraAgent"] = keys
+                state["agent_logs"].append(f"JiraAgent created {len(keys)} optimized tickets.")
+        else:
+            # Unknown action, default to unsupported
+            state["agent_logs"].append("Unsupported action. Could not proceed with your request")
+            state["intermediate_result"] = []
+            state["agent_results"]["JiraAgent"] = []
             
     except Exception as e:
         logger.error(f"JiraAgent error: {e}")
@@ -354,7 +464,6 @@ def git_agent_fn(state: AgentState) -> AgentState:
     state["__next__"] = state["agent_queue"].pop(0) if state["agent_queue"] else "END"
     return state
 
-# === Sprint Assistant as AI Orchestrator ===
 def sprint_agent_fn(state: AgentState) -> AgentState:
     """AI orchestrator that decides which agents to invoke."""
     try:
@@ -610,30 +719,161 @@ async def process_requirement(request: ProcessRequestModel):
         logger.info("🔄 Processing through LangGraph workflow...")
         result = app_state["workflow"].invoke(initial_state)
         
-        # Format response based on agent results
+        # Format response based on agent results with consistent structure
         success = bool(result.get('agent_results'))
         
         # Extract results from different agents
         tasks = result.get('agent_results', {}).get('RequirementAgent', [])
-        jira_keys = result.get('agent_results', {}).get('JiraAgent', [])
+        jira_results = result.get('agent_results', {}).get('JiraAgent', [])
         pr_statuses = result.get('agent_results', {}).get('GitAgent', [])
+        intermediate_result = result.get('intermediate_result', [])
+        
+        # Standardize response structure for all operations
+        jira_keys = []
+        jira_tickets = []
+        operation_type = "UNKNOWN"
+        
+        # Determine operation type from agent logs - improved detection
+        agent_logs = result.get('agent_logs', [])
+        agent_logs_text = " ".join(agent_logs).lower()
+        
+        if any("detected action: create" in log.lower() for log in agent_logs) or "created" in agent_logs_text and "tickets" in agent_logs_text:
+            operation_type = "CREATE"
+        elif any("detected action: fetch" in log.lower() for log in agent_logs) or "processing fetch request" in agent_logs_text or "fetched" in agent_logs_text:
+            operation_type = "FETCH"
+        elif any("detected action: unsupported" in log.lower() for log in agent_logs) or "unsupported action" in agent_logs_text:
+            operation_type = "UNSUPPORTED"
+        
+        # Process results based on operation type
+        if operation_type == "CREATE":
+            # For CREATE: tasks from RequirementAgent, jira_keys from JiraAgent
+            if jira_results:
+                for item in jira_results:
+                    if isinstance(item, str):
+                        # Handle string keys (legacy or error cases)
+                        jira_keys.append(item)
+                        ticket_data = {
+                            "key": item,
+                            "operation": "created",
+                            "status": "SUCCESS" if not item.startswith("ERROR") else "ERROR",
+                            "priority": "Medium",  # Default priority for string keys
+                            "jira_status": "To Do"  # Default JIRA status for new tickets
+                        }
+                        jira_tickets.append(ticket_data)
+                    elif isinstance(item, dict):
+                        # Handle detailed ticket info from updated create_jira_ticket function
+                        jira_keys.append(item.get("key", str(item)))
+                        ticket_data = {
+                            "key": item.get("key", str(item)),
+                            "operation": "created",
+                            "status": "SUCCESS",
+                            "priority": item.get("priority", "Medium"),
+                            "jira_status": item.get("jira_status", "To Do"),
+                            "summary": item.get("summary", "")
+                        }
+                        jira_tickets.append(ticket_data)
+                    else:
+                        # Handle other types
+                        jira_keys.append(str(item))
+                        jira_tickets.append({
+                            "key": str(item),
+                            "operation": "created",
+                            "status": "ERROR",
+                            "priority": "Unknown",
+                            "jira_status": "Unknown"
+                        })
+            
+            # Add task-ticket correlation for CREATE operations
+            if tasks and jira_keys:
+                for i, task in enumerate(tasks):
+                    if i < len(jira_tickets):
+                        jira_tickets[i]["task"] = task
+                        jira_tickets[i]["task_summary"] = task[:100] + "..." if len(task) > 100 else task
+        
+        elif operation_type == "FETCH":
+            # For FETCH: use intermediate_result which contains full ticket data
+            if intermediate_result:
+                for item in intermediate_result:
+                    if isinstance(item, dict):
+                        if 'key' in item:
+                            jira_keys.append(item['key'])
+                            # Enhanced ticket data with priority and status
+                            ticket_data = {
+                                **item,
+                                "operation": "fetched",
+                                "status": "SUCCESS" if 'error' not in item else "ERROR",
+                                "priority": item.get('priority', 'Unknown'),
+                                "jira_status": item.get('status', 'Unknown')
+                            }
+                            jira_tickets.append(ticket_data)
+                        elif 'error' in item:
+                            error_key = item.get('key', 'UNKNOWN')
+                            jira_keys.append(error_key)
+                            jira_tickets.append({
+                                **item,
+                                "operation": "fetched",
+                                "status": "ERROR",
+                                "priority": "Unknown",
+                                "jira_status": "Unknown"
+                            })
+                        else:
+                            # Message responses
+                            jira_tickets.append({
+                                **item,
+                                "operation": "fetched",
+                                "status": "INFO",
+                                "priority": "N/A",
+                                "jira_status": "N/A"
+                            })
+        
+        elif operation_type == "UNSUPPORTED":
+            # For UNSUPPORTED: provide consistent error structure
+            jira_tickets.append({
+                "operation": "blocked",
+                "status": "UNSUPPORTED",
+                "priority": "N/A",
+                "jira_status": "N/A",
+                "message": "Unsupported action. Could not proceed with your request",
+                "reason": "Operation not allowed (update/delete/modify operations are blocked)"
+            })
         
         response_data = {
+            "operation_type": operation_type,
             "workflow_result": result,
-            "agent_logs": result.get('agent_logs', []),
+            "agent_logs": agent_logs,
             "summary": {
-                "tasks_generated": len(tasks) if tasks else 0,
-                "tickets_created": len([k for k in jira_keys if not str(k).startswith('ERROR')]) if jira_keys else 0,
-                "errors": len([k for k in jira_keys if str(k).startswith('ERROR')]) if jira_keys else 0,
-                "pr_statuses_checked": len(pr_statuses) if pr_statuses else 0
+                "operation": operation_type.lower(),
+                "success_count": len([t for t in jira_tickets if t.get("status") == "SUCCESS"]),
+                "error_count": len([t for t in jira_tickets if t.get("status") == "ERROR"]),
+                "total_processed": len(jira_tickets),
+                "tasks_generated": len(tasks) if tasks else 0
             }
         }
         
-        # Build response message from agent logs
-        if result.get('agent_logs'):
-            message = "; ".join(result['agent_logs'][-3:])  # Show last 3 log entries
+        # Build consistent response message
+        if operation_type == "CREATE":
+            success_count = len([k for k in jira_keys if not str(k).startswith('ERROR')])
+            error_count = len([k for k in jira_keys if str(k).startswith('ERROR')])
+            if success_count > 0:
+                message = f"Created {success_count} ticket(s) successfully"
+                if error_count > 0:
+                    message += f" ({error_count} failed)"
+            else:
+                message = f"Failed to create tickets ({error_count} errors)"
+        elif operation_type == "FETCH":
+            success_count = len([t for t in jira_tickets if t.get("status") == "SUCCESS"])
+            error_count = len([t for t in jira_tickets if t.get("status") == "ERROR"])
+            if success_count > 0:
+                message = f"Fetched {success_count} ticket(s) successfully"
+                if error_count > 0:
+                    message += f" ({error_count} failed)"
+            else:
+                message = f"Failed to fetch tickets ({error_count} errors)"
+        elif operation_type == "UNSUPPORTED":
+            message = "Unsupported action. Could not proceed with your request"
+            success = False
         else:
-            message = "Request processed"
+            message = "; ".join(agent_logs[-3:]) if agent_logs else "Request processed"
         
         logger.info(f"✅ Processing completed: {message}")
         
@@ -641,8 +881,9 @@ async def process_requirement(request: ProcessRequestModel):
             success=success,
             message=message,
             data=response_data,
-            tasks=tasks,
+            tasks=tasks if operation_type == "CREATE" else None,  # Include tasks for CREATE operations
             jira_keys=jira_keys,
+            jira_tickets=jira_tickets,
             pr_statuses=pr_statuses
         )
         
