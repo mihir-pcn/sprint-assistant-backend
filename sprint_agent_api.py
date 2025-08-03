@@ -787,8 +787,11 @@ async def process_requirement(request: ProcessRequestModel):
             if tasks and jira_keys:
                 for i, task in enumerate(tasks):
                     if i < len(jira_tickets):
-                        jira_tickets[i]["task"] = task
-                        jira_tickets[i]["task_summary"] = task[:100] + "..." if len(task) > 100 else task
+                        jira_tickets[i]["description"] = task  # Full task description (consistent with FETCH)
+                        jira_tickets[i]["task_summary"] = task[:100] + "..." if len(task) > 100 else task  # Truncated for backward compatibility
+                        # Use summary from ticket creation or fallback to task title
+                        if "summary" not in jira_tickets[i] or not jira_tickets[i]["summary"]:
+                            jira_tickets[i]["summary"] = task[:80] + "..." if len(task) > 80 else task
         
         elif operation_type == "FETCH":
             # For FETCH: use intermediate_result which contains full ticket data
@@ -805,6 +808,9 @@ async def process_requirement(request: ProcessRequestModel):
                                 "priority": item.get('priority', 'Unknown'),
                                 "jira_status": item.get('status', 'Unknown')
                             }
+                            # Add consistent field for backward compatibility
+                            if 'summary' in item:
+                                ticket_data["task_summary"] = item['summary'][:100] + "..." if len(item['summary']) > 100 else item['summary']
                             jira_tickets.append(ticket_data)
                         elif 'error' in item:
                             error_key = item.get('key', 'UNKNOWN')
